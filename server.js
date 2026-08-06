@@ -9,6 +9,9 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 
+// Initialize Hermes memory database
+require('./lib/hermes-memory').initDb();
+
 const app = express();
 
 const { requireAuth } = require('./lib/require-auth');
