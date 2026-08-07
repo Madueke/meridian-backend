@@ -1,36 +1,25 @@
 // routes/train.js — POST /train: train the co-pilot from uploaded material.
 //
 // Accepts multipart uploads (PDF strategy documents and/or chart/setup
-// images), extracts the text/images, and asks Claude to PROPOSE a strategy-
-// profile update. NOTHING is saved by this endpoint — the app shows the
-// proposal and lets the user Confirm (POST /strategy applies it), Edit, or
-// Discard. TRADING MODE: read-only extraction, no execution, no automation.
+// images), extracts the text/images, and asks Hermes (the same LLM backend
+// that powers /chat and /analyze) to PROPOSE a strategy-profile update.
+// NOTHING is saved by this endpoint — the app shows the proposal and lets the
+// user Confirm (POST /strategy applies it), Edit, or Discard. TRADING MODE:
+// read-only extraction, no execution, no automation.
 
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { PDFParse } = require('pdf-parse');
-const axios = require('axios');
 const strategyStore = require('../lib/strategy-store');
+const hermesClient = require('../lib/hermes-client');
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024, files: 8 },
 });
 
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
 const MAX_PDF_CHARS = 20000;
-
-function hasApiKey() {
-  const key = process.env.CLAUDE_API_KEY || '';
-  return (
-    key &&
-    key !== 'your_key_here' &&
-    !key.includes('YOUR_REAL_KEY_HERE') &&
-    key.length > 20
-  );
-}
 
 function isPdf(file) {
   const mime = (file.mimetype || '').toLowerCase();
@@ -124,9 +113,11 @@ router.post('/', (req, res, next) => {
       if (files.length === 0) {
         return res.status(400).json({ error: 'Upload at least one PDF or image' });
       }
-      if (!hasApiKey()) {
+      if (!hermesClient.isConfigured()) {
         return res.status(400).json({
-          error: 'The backend has no Claude API key configured. Add CLAUDE_API_KEY to the server .env to use Train mode.',
+          error:
+            'The backend has no Hermes LLM configured. Set HERMES_API_SERVER_URL and ' +
+            'HERMES_API_SERVER_KEY in the server .env to use Train mode.',
         });
       }
 
@@ -166,35 +157,34 @@ router.post('/', (req, res, next) => {
       }
 
       const current = strategyStore.getProfile(user_id);
-      const { data } = await axios.post(
-        ANTHROPIC_URL,
-        {
-          model: MODEL,
-          max_tokens: 2000,
-          system: buildExtractionSystemPrompt(current ? current.profile : null),
-          messages: [{ role: 'user', content: contentBlocks }],
-        },
-        {
-          headers: {
-            'x-api-key': process.env.CLAUDE_API_KEY,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json',
-          },
-          timeout: 90000,
-        },
-      );
+      // Convert the extracted blocks into OpenAI-style content parts: PDF text
+      // as text parts, images as base64 data URLs (Hermes accepts data URLs
+      // directly in image_url parts).
+      const content = contentBlocks.map((block) => {
+        if (block.type === 'image') {
+          return {
+            type: 'image_url',
+            image_url: {
+              url: `data:${block.source.media_type};base64,${block.source.data}`,
+            },
+          };
+        }
+        return { type: 'text', text: block.text };
+      });
 
-      const text = (data.content || [])
-        .filter((b) => b.type === 'text')
-        .map((b) => b.text)
-        .join('\n')
-        .trim();
+      const { reply } = await hermesClient.chat({
+        content,
+        history: [],
+        session_id: 'train',
+        user_id,
+        system_prompt: buildExtractionSystemPrompt(current ? current.profile : null),
+      });
 
       res.json({
-        proposed: parseProposalJson(text),
+        proposed: parseProposalJson(reply),
         sources,
         current_profile: current ? current.profile : null,
-        llm: 'claude',
+        llm: 'hermes',
       });
     } catch (routeErr) {
       next(routeErr);
