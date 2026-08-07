@@ -9,9 +9,6 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 
-// Initialize Hermes memory database
-require('./lib/hermes-memory').initDb();
-
 // Initialize and start alarm scheduler
 const { startAlarmScheduler, stopAlarmScheduler } = require('./lib/alarms');
 const alarmTimer = startAlarmScheduler();

@@ -13,7 +13,6 @@ const router = express.Router();
 const auth = require('../lib/auth');
 const store = require('../lib/store');
 const strategyStore = require('../lib/strategy-store');
-const hermesMemory = require('../lib/hermes-memory');
 
 // Conservative defaults for a brand-new user who has not trained or reviewed
 // anything yet. Users can later change these via the config chat / Agent
@@ -36,18 +35,12 @@ const DEFAULT_PROFILE = {
 router.post('/activate', (req, res) => {
   const user_id = req.userId;
 
-  let defaultsApplied = { strategy_profile: false, memory_session: false };
+  let defaultsApplied = { strategy_profile: false };
 
   if (!strategyStore.getProfile(user_id)) {
     strategyStore.saveProfile(user_id, DEFAULT_PROFILE);
     defaultsApplied.strategy_profile = true;
   }
-
-  // Confirm a memory partition exists (hermes memory is user_id-scoped via
-  // session rows). 'default' is the session id the app uses for chat.
-  hermesMemory.initDb();
-  hermesMemory.getOrCreateSession('default', user_id);
-  defaultsApplied.memory_session = true;
 
   auth.setAgentActive(user_id, true);
 
