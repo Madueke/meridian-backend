@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const hermesClient = require('../lib/hermes-client');
 const { checkUsageCap, incrementUsage } = require('../lib/usage-caps');
+const { looksLikeCredentials } = require('../lib/credential-guard');
 
 router.post('/', async (req, res) => {
   const { message, history = [], attachments = [], chart_url, session_id = 'default' } = req.body || {};
@@ -17,6 +18,22 @@ router.post('/', async (req, res) => {
 
   if (!message) {
     return res.status(400).json({ error: 'message is required' });
+  }
+
+  // Task 5 safety net: refuse to forward credential-shaped content to Hermes,
+  // where it could be persisted in conversation memory. This is a coarse
+  // heuristic — the structural boundary (MCP tools never accept credentials)
+  // is the real defense. Users must connect accounts via the app's Connect
+  // Trading Accounts screen, which posts credentials once to encrypted
+  // storage and never shows them to the LLM.
+  if (looksLikeCredentials(message)) {
+    return res.status(200).json({
+      reply:
+        '[Neutral Pip] Don\'t share account passwords or login credentials in ' +
+        'chat — anything typed here becomes part of the conversation memory. ' +
+        'Use the app\'s Settings → Connect Trading Accounts screen instead, ' +
+        'which stores your credentials encrypted and never exposes them to the AI.',
+    });
   }
 
   // user_id is always resolved server-side from the Bearer session token —

@@ -5,11 +5,12 @@
 // hard-coded risk gate runs in this process before any place_trade call and
 // an LLM can never override it. No on-screen automation.
 //
-// Credentials are never accepted from tool arguments. The user's encrypted
-// MT5 credentials are resolved from the backend store (same box, same
-// STRATEGY_ENC_KEY) via an optional user_ref; when omitted, the backend's
-// current default connected account is used. MT5_BACKEND_URL must be set for
-// real calls — until then tools report clean "not configured" results.
+// Credentials are never accepted from tool arguments, and tools never take a
+// user identifier from the LLM either. The user's encrypted MT5 credentials
+// are resolved from the backend store (same box, same STRATEGY_ENC_KEY) using
+// the backend's configured default user (NP_DEFAULT_USER_ID). MT5_BACKEND_URL
+// must be set for real calls — until then tools report clean "not configured"
+// results.
 // Load the backend .env explicitly — Hermes spawns this process directly and
 // does not inherit the backend's environment, so MT5_BACKEND_URL and
 // NP_DEFAULT_USER_ID would be missing without this.
@@ -23,6 +24,7 @@ const { riskGate } = require('../lib/risk-gate');
 const { dailyUsage } = require('../lib/daily-usage');
 const strategyStore = require('../lib/strategy-store');
 const mt5Bridge = require('../lib/mt5-bridge');
+const store = require('../lib/store');
 
 // Machine-readable prefix the backend looks for in the approval event command
 // to recognize this as a trade-approval request and parse the exact order.
@@ -38,16 +40,11 @@ server.registerTool(
   {
     title: 'Get MT5 account state',
     description:
-      "Fetch the user's live MT5 account state: balance, equity, open positions and recent history. Read-only.",
-    inputSchema: z.object({
-      user_ref: z
-        .string()
-        .optional()
-        .describe('Optional internal user reference. Omit to use the default connected account.'),
-    }),
+      "Fetch the user's live MT5 account state: balance, equity, open positions and recent history. Read-only. Uses the connected account; never takes credentials.",
+    inputSchema: z.object({}),
   },
-  async ({ user_ref }) => {
-    const { user_id, credentials, error } = resolveCredentials(user_ref);
+  async () => {
+    const { user_id, credentials, error } = resolveCredentials();
     if (error) {
       return { content: [{ type: 'text', text: JSON.stringify({ available: false, reason: error }) }] };
     }
@@ -73,6 +70,33 @@ server.registerTool(
 );
 
 server.registerTool(
+  'check_connection_status',
+  {
+    title: 'Check account connection status',
+    description:
+      'Report whether the user has an MT5 account connected (via the app\'s Connect Trading Accounts flow) and whether a TradingView watchlist is configured. Read-only. Never request or accept account credentials through chat — if the user asks to connect an account, call this tool and direct them to Settings → Connect Trading Accounts.',
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const { user_id, error } = resolveCredentials();
+    const connections = store.get('connections', user_id);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            mt5_connected: !error,
+            tradingview_configured: Boolean(
+              connections && connections.tradingview,
+            ),
+          }),
+        },
+      ],
+    };
+  },
+);
+
+server.registerTool(
   'place_trade',
   {
     title: 'Place MT5 trade',
@@ -85,15 +109,11 @@ server.registerTool(
       stop: z.number().describe('Stop loss price'),
       target: z.number().describe('Take profit price'),
       risk_percent: z.number().describe('Risk as % of account balance'),
-      user_ref: z
-        .string()
-        .optional()
-        .describe('Optional internal user reference. Omit to use the default connected account.'),
     }),
   },
-  async ({ symbol, direction, entry, stop, target, risk_percent, user_ref }) => {
+  async ({ symbol, direction, entry, stop, target, risk_percent }) => {
     const order = { symbol, direction, entry, stop, target, risk_percent };
-    const { user_id, credentials, error } = resolveCredentials(user_ref);
+    const { user_id, credentials, error } = resolveCredentials();
     if (error) {
       return { content: [{ type: 'text', text: JSON.stringify({ executed: false, error }) }] };
     }
