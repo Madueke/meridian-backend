@@ -5,12 +5,13 @@
 // hard-coded risk gate runs in this process before any place_trade call and
 // an LLM can never override it. No on-screen automation.
 //
-// Credentials are never accepted from tool arguments, and tools never take a
-// user identifier from the LLM either. The user's encrypted MT5 credentials
-// are resolved from the backend store (same box, same STRATEGY_ENC_KEY) using
-// the backend's configured default user (NP_DEFAULT_USER_ID). MT5_BACKEND_URL
-// must be set for real calls — until then tools report clean "not configured"
-// results.
+// Credentials are never accepted from tool arguments. Tools take an optional
+// user_ref that the backend injects into the conversation from the app's
+// session token (the LLM is told to relay it, never invent it); when absent,
+// the backend's configured default user (NP_DEFAULT_USER_ID) is used. The
+// user's encrypted MT5 credentials are resolved from the backend store (same
+// box, same STRATEGY_ENC_KEY). MT5_BACKEND_URL must be set for real calls —
+// until then tools report clean "not connected" results.
 // Load the backend .env explicitly — Hermes spawns this process directly and
 // does not inherit the backend's environment, so MT5_BACKEND_URL and
 // NP_DEFAULT_USER_ID would be missing without this.
@@ -41,10 +42,15 @@ server.registerTool(
     title: 'Get MT5 account state',
     description:
       "Fetch the user's live MT5 account state: balance, equity, open positions and recent history. Read-only. Uses the connected account; never takes credentials.",
-    inputSchema: z.object({}),
+    inputSchema: z.object({
+      user_ref: z
+        .string()
+        .optional()
+        .describe('Server-supplied user reference for this session (from the app session token). Omit only if unknown; never invent one.'),
+    }),
   },
-  async () => {
-    const { user_id, credentials, error } = resolveCredentials();
+  async ({ user_ref }) => {
+    const { user_id, credentials, error } = resolveCredentials(user_ref);
     if (error) {
       return { content: [{ type: 'text', text: JSON.stringify({ available: false, reason: error }) }] };
     }
@@ -75,10 +81,15 @@ server.registerTool(
     title: 'Check account connection status',
     description:
       'Report whether the user has an MT5 account connected (via the app\'s Connect Trading Accounts flow) and whether a TradingView watchlist is configured. Read-only. Never request or accept account credentials through chat — if the user asks to connect an account, call this tool and direct them to Settings → Connect Trading Accounts.',
-    inputSchema: z.object({}),
+    inputSchema: z.object({
+      user_ref: z
+        .string()
+        .optional()
+        .describe('Server-supplied user reference for this session (from the app session token). Omit only if unknown; never invent one.'),
+    }),
   },
-  async () => {
-    const { user_id, error } = resolveCredentials();
+  async ({ user_ref }) => {
+    const { user_id, error } = resolveCredentials(user_ref);
     const connections = store.get('connections', user_id);
     return {
       content: [
@@ -109,11 +120,15 @@ server.registerTool(
       stop: z.number().describe('Stop loss price'),
       target: z.number().describe('Take profit price'),
       risk_percent: z.number().describe('Risk as % of account balance'),
+      user_ref: z
+        .string()
+        .optional()
+        .describe('Server-supplied user reference for this session (from the app session token). Omit only if unknown; never invent one.'),
     }),
   },
-  async ({ symbol, direction, entry, stop, target, risk_percent }) => {
+  async ({ symbol, direction, entry, stop, target, risk_percent, user_ref }) => {
     const order = { symbol, direction, entry, stop, target, risk_percent };
-    const { user_id, credentials, error } = resolveCredentials();
+    const { user_id, credentials, error } = resolveCredentials(user_ref);
     if (error) {
       return { content: [{ type: 'text', text: JSON.stringify({ executed: false, error }) }] };
     }

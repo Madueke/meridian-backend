@@ -89,7 +89,7 @@ router.post('/', async (req, res) => {
         attachments,
         session_id,
         user_id: userId,
-        system_prompt: hermesClient.NEUTRAL_PIP_SYSTEM,
+        system_prompt: hermesClient.buildSystemPrompt(userId),
         onApproval: async ({ run_id, event }) => {
           const decision = await require('../lib/trade-approval').decideTradeApproval({
             command: event.command,
@@ -113,7 +113,7 @@ router.post('/', async (req, res) => {
           attachments,
           session_id,
           user_id: userId,
-          system_prompt: hermesClient.NEUTRAL_PIP_SYSTEM,
+          system_prompt: hermesClient.buildSystemPrompt(userId),
         });
       } else {
         throw err;
