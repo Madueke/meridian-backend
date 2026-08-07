@@ -34,6 +34,16 @@ router.post('/', async (req, res) => {
     if (session && session.user_id) userId = session.user_id;
   }
 
+  // Authenticated users must activate their agent before the chat assistant
+  // will respond. Anonymous (guest) chat is unaffected.
+  if (userId !== 'anonymous' && !require('../lib/auth').isAgentActive(userId)) {
+    return res.status(200).json({
+      reply:
+        '[Neutral Pip] Your agent is paused. Open the app and activate your agent to resume chat, analysis and alarms.',
+      activation_required: true,
+    });
+  }
+
   // Determine API key: user's own key (from header) takes priority
   const userApiKey = req.headers['x-api-key'];
   const hasOwnKey = userApiKey && userApiKey !== 'your_key_here';

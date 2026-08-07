@@ -70,6 +70,8 @@ app.use('/strategy', requireAuth, require('./routes/strategy'));
 app.use('/backtest', requireAuth, require('./routes/backtest'));
 app.use('/train', requireAuth, require('./routes/train'));
 app.use('/config', requireAuth, require('./routes/config'));
+app.use('/agent', requireAuth, require('./routes/agent'));
+app.use('/admin', require('./routes/admin'));
 app.use('/settings', requireAuth, require('./routes/settings'));
 const market = require('./routes/market');
 app.use('/quote', market.quoteRouter);
