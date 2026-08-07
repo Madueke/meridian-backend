@@ -103,4 +103,72 @@ chartRouter.get('/', async (req, res, next) => {
   }
 });
 
+// GET /quotes/batch?symbols=XAUUSD,BTCUSD,ETHUSD&timeframe=M15
+// Batch endpoint for watchlist polling — returns array of quote objects.
+quoteRouter.get('/batch', async (req, res, next) => {
+  try {
+    const { symbols } = req.query;
+    if (!symbols || typeof symbols !== 'string' || !symbols.trim()) {
+      return res.status(400).json({ error: 'symbols is required (comma-separated)' });
+    }
+    const timeframe = req.query.timeframe || DEFAULT_TIMEFRAME;
+    const symbolList = symbols.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+    if (symbolList.length === 0) {
+      return res.status(400).json({ error: 'at least one symbol required' });
+    }
+    if (symbolList.length > 20) {
+      return res.status(400).json({ error: 'max 20 symbols per batch' });
+    }
+
+    const results = await Promise.allSettled(
+      symbolList.map(async (symbol) => {
+        const data = await marketData.fetchCandles(symbol, timeframe);
+        const closes = data.candles.map((c) => c.close);
+        const highs = data.candles.map((c) => c.high);
+        const lows = data.candles.map((c) => c.low);
+        const snap = indicators.lastSnapshot({ closes, highs, lows });
+        const last = closes[closes.length - 1];
+        const prevIndex = closes.length - 1 - 24; // 24-candle window for 24h change
+        const prev = prevIndex >= 0 ? closes[prevIndex] : null;
+        const changePercent = prev ? ((last - prev) / prev) * 100 : 0;
+        return {
+          status: 'ok',
+          symbol: data.symbol,
+          timeframe: data.timeframe,
+          source: data.source,
+          last_close: snap.last_close,
+          change_percent: Math.round(changePercent * 1e4) / 1e4,
+          rsi_14: snap.rsi_14,
+          ema20: snap.ema20,
+          ema50: snap.ema50,
+          macd: snap.macd,
+          macd_histogram: snap.macd_histogram,
+          atr_14: snap.atr_14,
+          spark: data.candles.slice(-SPARK_CANDLES).map((c) => [
+            c.open,
+            c.high,
+            c.low,
+            c.close,
+          ]),
+          at: new Date().toISOString(),
+        };
+      }),
+    );
+
+    const quotes = results.map((r, i) =>
+      r.status === 'fulfilled'
+        ? r.value
+        : {
+            status: 'error',
+            symbol: symbolList[i],
+            error: r.reason?.message || 'fetch failed',
+          },
+    );
+
+    res.json({ quotes });
+  } catch (err) {
+    res.status(502).json({ status: 'error', error: err.message });
+  }
+});
+
 module.exports = { quoteRouter, chartRouter };

@@ -70,6 +70,7 @@ app.use('/config', requireAuth, require('./routes/config'));
 app.use('/agent', requireAuth, require('./routes/agent'));
 app.use('/admin', require('./routes/admin'));
 app.use('/settings', requireAuth, require('./routes/settings'));
+app.use('/watchlist', requireAuth, require('./routes/watchlist'));
 const market = require('./routes/market');
 app.use('/quote', market.quoteRouter);
 app.use('/chart', market.chartRouter);
