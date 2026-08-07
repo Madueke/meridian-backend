@@ -14,8 +14,9 @@
 // until then tools report clean "not connected" results.
 // Load the backend .env explicitly — Hermes spawns this process directly and
 // does not inherit the backend's environment, so MT5_BACKEND_URL and
-// NP_DEFAULT_USER_ID would be missing without this.
-require('dotenv').config({ path: '/home/ubuntu/meridian-backend/.env' });
+// NP_DEFAULT_USER_ID would be missing without this. Suppress dotenv output
+// to stdout (breaks MCP stdio protocol).
+require('dotenv').config({ path: '/home/ubuntu/meridian-backend/.env', quiet: true });
 
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
