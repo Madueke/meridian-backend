@@ -17,12 +17,20 @@ Run:
   python windows_bridge.py
 
 Configure as a Windows service via NSSM for production.
+
+Environment variables for persistent MT5 connection:
+  MT5_ACCOUNT_NUMBER    - Demo/real account number
+  MT5_PASSWORD          - Account password
+  MT5_BROKER_SERVER     - Broker server name (e.g., "ICMarkets-Demo")
+  MT5_BRIDGE_PORT       - HTTP port (default 8643)
+  MT5_BRIDGE_HOST       - Bind host (default 0.0.0.0)
 """
 
 import os
 import json
 import logging
-from datetime import datetime
+import signal
+import sys
 from flask import Flask, request, jsonify
 
 try:
@@ -44,31 +52,74 @@ logger = logging.getLogger(__name__)
 PORT = int(os.getenv("MT5_BRIDGE_PORT", "8643"))
 HOST = os.getenv("MT5_BRIDGE_HOST", "0.0.0.0")
 
+# MT5 credentials for persistent connection (set at startup via env)
+MT5_ACCOUNT_NUMBER = os.getenv("MT5_ACCOUNT_NUMBER")
+MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
+MT5_BROKER_SERVER = os.getenv("MT5_BROKER_SERVER", "")
+
+# Global state for MT5 connection
+_mt5_initialized = False
+_mt5_logged_in = False
+_mt5_login_credentials = None
+
 
 def error_response(reason, status=503):
     """Standard error response format."""
     return jsonify({"error": True, "reason": reason}), status
 
 
-def init_mt5():
-    """Initialize MT5 terminal connection."""
+def init_mt5_connection():
+    """Initialize MT5 terminal connection once at startup."""
+    global _mt5_initialized
     if not MT5_AVAILABLE:
         return False, "MetaTrader5 Python package not installed (pip install MetaTrader5)"
     if not mt5.initialize():
         return False, f"MT5 terminal not reachable: {mt5.last_error()}"
+    _mt5_initialized = True
     return True, None
 
 
 def login_mt5(credentials):
-    """Login to MT5 with provided credentials."""
+    """Login to MT5 with provided credentials. Returns (success, error_message)."""
+    global _mt5_logged_in, _mt5_login_credentials
+    
+    # Check if already logged in with same credentials
+    if _mt5_logged_in and _mt5_login_credentials == credentials:
+        return True, None
+    
+    # If logged in with different credentials, logout first
+    if _mt5_logged_in:
+        mt5.shutdown()
+        _mt5_logged_in = False
+        _mt5_login_credentials = None
+        # Re-initialize
+        ok, err = init_mt5_connection()
+        if not ok:
+            return False, err
+    
     login = int(credentials.get("account_number", 0))
     password = credentials.get("password", "")
     server = credentials.get("broker_server", "")
+    
     if not mt5.login(login, password=password, server=server):
         err = mt5.last_error()
         mt5.shutdown()
         return False, f"MT5 login failed: {err}"
+    
+    _mt5_logged_in = True
+    _mt5_login_credentials = credentials
     return True, None
+
+
+def ensure_mt5_ready(credentials):
+    """Ensure MT5 is initialized and logged in with given credentials."""
+    if not _mt5_initialized:
+        ok, err = init_mt5_connection()
+        if not ok:
+            return False, err
+    
+    ok, err = login_mt5(credentials)
+    return ok, err
 
 
 def format_position(p):
@@ -92,6 +143,28 @@ def format_deal(d):
     }
 
 
+def shutdown_mt5():
+    """Clean shutdown of MT5 connection."""
+    global _mt5_initialized, _mt5_logged_in
+    if _mt5_initialized:
+        try:
+            mt5.shutdown()
+        except Exception as e:
+            logger.warning(f"Error during MT5 shutdown: {e}")
+        _mt5_initialized = False
+        _mt5_logged_in = False
+
+
+# Signal handlers for graceful shutdown
+def signal_handler(signum, frame):
+    logger.info(f"Received signal {signum}, shutting down MT5 connection...")
+    shutdown_mt5()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+
 @app.get("/health")
 def health():
     return jsonify({
@@ -99,6 +172,8 @@ def health():
         "mode": "metaquotes",
         "simulation": False,
         "mt5_available": MT5_AVAILABLE,
+        "mt5_initialized": _mt5_initialized,
+        "mt5_logged_in": _mt5_logged_in,
         "platform": "windows",
     })
 
@@ -110,11 +185,7 @@ def account_state():
     if not credentials:
         return error_response("credentials required", 400)
 
-    ok, err = init_mt5()
-    if not ok:
-        return error_response(err)
-
-    ok, err = login_mt5(credentials)
+    ok, err = ensure_mt5_ready(credentials)
     if not ok:
         return error_response(err)
 
@@ -138,8 +209,6 @@ def account_state():
     except Exception as e:
         logger.exception("account_state error")
         return error_response(f"MT5 helper error: {e}")
-    finally:
-        mt5.shutdown()
 
 
 @app.post("/execute")
@@ -154,11 +223,7 @@ def execute():
     if not credentials:
         return error_response("credentials required", 400)
 
-    ok, err = init_mt5()
-    if not ok:
-        return error_response(err)
-
-    ok, err = login_mt5(credentials)
+    ok, err = ensure_mt5_ready(credentials)
     if not ok:
         return error_response(err)
 
@@ -212,13 +277,42 @@ def execute():
     except Exception as e:
         logger.exception("execute error")
         return error_response(f"MT5 helper error: {e}")
-    finally:
-        mt5.shutdown()
+
+
+def startup_mt5():
+    """Initialize and login to MT5 at startup if credentials are provided via env."""
+    global _mt5_logged_in, _mt5_login_credentials
+    
+    if not MT5_AVAILABLE:
+        logger.warning("MetaTrader5 package not installed — install with: pip install MetaTrader5")
+        return
+    
+    ok, err = init_mt5_connection()
+    if not ok:
+        logger.error(f"Failed to initialize MT5: {err}")
+        return
+    
+    # If credentials provided via environment, login at startup
+    if MT5_ACCOUNT_NUMBER and MT5_BROKER_SERVER:
+        credentials = {
+            "account_number": MT5_ACCOUNT_NUMBER,
+            "password": MT5_PASSWORD,
+            "broker_server": MT5_BROKER_SERVER,
+        }
+        ok, err = login_mt5(credentials)
+        if ok:
+            logger.info(f"MT5 auto-login successful for account {MT5_ACCOUNT_NUMBER} on {MT5_BROKER_SERVER}")
+        else:
+            logger.error(f"MT5 auto-login failed: {err}")
+    else:
+        logger.info("MT5 initialized; waiting for credentials via API requests")
 
 
 if __name__ == "__main__":
     logger.info(f"Starting Windows MT5 Bridge on {HOST}:{PORT}")
     logger.info(f"MT5 package available: {MT5_AVAILABLE}")
-    if not MT5_AVAILABLE:
-        logger.warning("MetaTrader5 package not installed — install with: pip install MetaTrader5")
+    
+    # Initialize MT5 at startup
+    startup_mt5()
+    
     app.run(host=HOST, port=PORT, debug=False)

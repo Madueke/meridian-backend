@@ -52,18 +52,25 @@ it just gets pointed at the Windows box.
   ```
 - Install the actual MetaTrader5 terminal application (from your broker, or the
   general MetaTrader5 terminal), log into a **DEMO** account first.
+- **Important:** The MT5 terminal must be running and logged in BEFORE starting
+  the bridge service. The bridge keeps a persistent connection to MT5.
 
 ### 2. Deploy the Windows bridge listener
 
 Copy the `bridge/` folder to the Windows machine (or just the `windows_bridge.py`
-file and install Flask + MetaTrader5). Run it:
+file and install Flask + MetaTrader5).
 
+**Option A: Manual run (testing)**
 ```powershell
 cd C:\path\to\bridge
+# Set credentials for auto-login at startup (optional but recommended)
+$env:MT5_ACCOUNT_NUMBER = "77700123"
+$env:MT5_PASSWORD = "your_password"
+$env:MT5_BROKER_SERVER = "ICMarkets-Demo"
 python windows_bridge.py
 ```
 
-For production, install as a Windows service via NSSM so it survives reboots:
+**Option B: NSSM Windows service (production)**
 
 ```powershell
 # Download NSSM: https://nssm.cc/download
@@ -73,14 +80,22 @@ nssm install MT5Bridge
 # Startup directory: C:\path\to\bridge
 nssm set MT5Bridge AppEnvironmentExtra MT5_BRIDGE_PORT=8643
 nssm set MT5Bridge AppEnvironmentExtra MT5_BRIDGE_HOST=0.0.0.0
+nssm set MT5Bridge AppEnvironmentExtra MT5_ACCOUNT_NUMBER=77700123
+nssm set MT5Bridge AppEnvironmentExtra MT5_PASSWORD=your_password
+nssm set MT5Bridge AppEnvironmentExtra MT5_BROKER_SERVER=ICMarkets-Demo
 nssm start MT5Bridge
 ```
+
+The bridge now **initializes MT5 once at startup and keeps the connection
+persistent**. It no longer calls `mt5.shutdown()` after each request. Credentials
+can be provided via environment variables for auto-login, or passed per-request
+via the API (the bridge will re-login only if credentials change).
 
 Verify it's alive:
 
 ```powershell
 Invoke-RestMethod http://localhost:8643/health
-# Should return: status=ok, mode=metaquotes, simulation=false
+# Should return: status=ok, mode=metaquotes, simulation=false, mt5_initialized=true, mt5_logged_in=true
 ```
 
 ### 3. Point the Linux bridge at the Windows box
