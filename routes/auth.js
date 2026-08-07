@@ -1,7 +1,8 @@
 // routes/auth.js — sign up / sign in / passkey / session endpoints.
 //
-//   POST /auth/signup    { email, display_name } → { user_id, session_token }
-//   POST /auth/signin    { email } → { user_id, has_passkey, display_name }
+//   POST /auth/signup    { email, display_name, device_secret? } → { user_id, session_token }
+//   POST /auth/signin    { email } → { user_id, has_passkey, has_device_secret, display_name }
+//   POST /auth/device/verify { email, device_secret } → { session_token, ... }
 //   POST /auth/passkey/register/begin    (session) → WebAuthn creation options
 //   POST /auth/passkey/register/complete (session) { public_key_credential }
 //   POST /auth/passkey/verify/begin      { user_id } → WebAuthn request options
@@ -10,8 +11,10 @@
 //   POST /auth/logout    { session_token }
 //   GET  /auth/session   ?session_token=... → { valid, user_id, email, ... }
 //
-// The passkey is the primary credential. Email sign-in alone never issues a
-// session; it only starts the WebAuthn ceremony (or reports no passkey yet).
+// Passkeys are the primary credential over HTTPS. On plain-HTTP / IP-address
+// deployments WebAuthn cannot run, so the app uses a device-bound secret
+// instead (see lib/auth.js). Email sign-in alone never issues a session; it
+// starts the passkey ceremony or the device-bound verify.
 
 const express = require('express');
 const router = express.Router();
@@ -19,9 +22,10 @@ const auth = require('../lib/auth');
 const { requireAuth } = require('../lib/require-auth');
 
 // POST /auth/signup — create the account and open a session immediately so
-// the app can run the passkey registration ceremony right away.
+// the app can run the passkey registration ceremony (or bind its device
+// secret) right away.
 router.post('/signup', (req, res) => {
-  const { email, display_name } = req.body || {};
+  const { email, display_name, device_secret } = req.body || {};
   if (!email || !email.includes('@')) {
     return res.status(400).json({ error: 'A valid email is required' });
   }
@@ -29,6 +33,13 @@ router.post('/signup', (req, res) => {
     return res.status(409).json({ error: 'An account with this email already exists' });
   }
   const user = auth.createUser(email, display_name);
+  if (
+    device_secret &&
+    typeof device_secret === 'string' &&
+    device_secret.length >= 16
+  ) {
+    auth.setDeviceSecret(user.user_id, device_secret);
+  }
   const sessionToken = auth.createSession(user.user_id);
   res.json({
     user_id: user.user_id,
@@ -49,6 +60,42 @@ router.post('/signin', (req, res) => {
     user_id: user.user_id,
     display_name: user.display_name,
     has_passkey: user.passkey_registered,
+    has_device_secret: auth.hasDeviceSecret(user.user_id),
+  });
+});
+
+// POST /auth/device/verify — device-bound sign-in for deployments where
+// passkeys cannot run (plain HTTP / IP address). Issues a session when the
+// secret matches. A credential-less account (no passkey, no device secret —
+// e.g. created before device binding existed) is bound to the calling device
+// on first verify so existing accounts are not bricked.
+router.post('/device/verify', (req, res) => {
+  const { email, device_secret } = req.body || {};
+  if (!email || !device_secret || typeof device_secret !== 'string') {
+    return res
+      .status(400)
+      .json({ error: 'email and device_secret are required' });
+  }
+  const user = auth.getUserByEmail(email);
+  if (!user) {
+    return res.status(404).json({ error: 'No account found for this email' });
+  }
+  const canBind = !user.passkey_registered && !auth.hasDeviceSecret(user.user_id);
+  if (canBind) {
+    auth.setDeviceSecret(user.user_id, device_secret);
+  } else if (!auth.verifyDeviceSecret(user.user_id, device_secret)) {
+    return res.status(403).json({
+      error:
+        'Device sign-in failed: this account is already linked to another device.',
+    });
+  }
+  const sessionToken = auth.createSession(user.user_id);
+  res.json({
+    user_id: user.user_id,
+    display_name: user.display_name,
+    email: user.email,
+    session_token: sessionToken,
+    device_bound: canBind,
   });
 });
 
