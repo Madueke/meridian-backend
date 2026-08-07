@@ -4,6 +4,12 @@
 const express = require('express');
 const router = express.Router();
 const neutralPipAgent = require('../lib/neutral-pip-agent');
+const { 
+  getDefaultApiKey, 
+  hasUserApiKey, 
+  checkUsageCap, 
+  incrementUsage 
+} = require('../lib/usage-caps');
 
 router.post('/', async (req, res) => {
   const { message, history = [], attachments = [], chart_url, session_id = 'default' } = req.body || {};
@@ -18,19 +24,48 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'message is required' });
   }
 
-  // Get api_key from header x-api-key OR from process.env.CLAUDE_API_KEY (fallback)
-  const apiKey = req.headers['x-api-key'] || process.env.CLAUDE_API_KEY;
+  // user_id is always resolved server-side from the Bearer session token —
+  // the client never sends it. Falls back to 'anonymous' for unauthenticated
+  // chat (default-key / guest usage).
+  let userId = 'anonymous';
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) {
+    const session = require('../lib/auth').resolveSession(authHeader.slice(7).trim());
+    if (session && session.user_id) userId = session.user_id;
+  }
+
+  // Determine API key: user's own key (from header) takes priority
+  const userApiKey = req.headers['x-api-key'];
+  const hasOwnKey = userApiKey && userApiKey !== 'your_key_here';
+  
+  let apiKey;
+  let usingDefaultKey = false;
+  
+  if (hasOwnKey) {
+    apiKey = userApiKey;
+  } else {
+    // Fall back to server default key
+    apiKey = getDefaultApiKey();
+    usingDefaultKey = !!apiKey;
+  }
   
   // Get model from header x-model OR default 'claude-sonnet-4-6'
   const model = req.headers['x-model'] || 'claude-sonnet-4-6';
-  
-  // Get user_id from the Bearer token if auth middleware has set req.user, else use 'anonymous'
-  const userId = req.user?.user_id || 'anonymous';
 
   if (!apiKey || apiKey === 'your_key_here') {
     return res.status(200).json({ 
       reply: '[Neutral Pip] No API key configured. Open the app Settings → AI Engine Configuration and add your Claude or OpenRouter key, then set the backend URL to this server.' 
     });
+  }
+
+  // If using default key, check usage cap
+  if (usingDefaultKey) {
+    const capCheck = checkUsageCap(userId);
+    if (!capCheck.allowed) {
+      return res.status(200).json({ 
+        reply: `[Neutral Pip] ${capCheck.reason} (${capCheck.calls}/${capCheck.callLimit} calls, ${capCheck.tokens}/${capCheck.tokenLimit} tokens today)` 
+      });
+    }
   }
 
   try {
@@ -45,10 +80,18 @@ router.post('/', async (req, res) => {
       model,
     });
 
+    // Track usage for default key users
+    if (usingDefaultKey) {
+      // Estimate tokens: rough approximation (1 token ≈ 4 chars)
+      const estimatedTokens = Math.ceil((message.length + result.reply.length) / 4);
+      incrementUsage(userId, estimatedTokens);
+    }
+
     res.json({ 
       reply: result.reply, 
       model_used: result.model_used, 
-      session_id: result.session_id 
+      session_id: result.session_id,
+      using_default_key: usingDefaultKey,
     });
 
   } catch (err) {

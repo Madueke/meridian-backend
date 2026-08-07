@@ -12,6 +12,22 @@ const helmet = require('helmet');
 // Initialize Hermes memory database
 require('./lib/hermes-memory').initDb();
 
+// Initialize and start alarm scheduler
+const { startAlarmScheduler, stopAlarmScheduler } = require('./lib/alarms');
+const alarmTimer = startAlarmScheduler();
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('[server] SIGTERM received, shutting down...');
+  stopAlarmScheduler(alarmTimer);
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  console.log('[server] SIGINT received, shutting down...');
+  stopAlarmScheduler(alarmTimer);
+  process.exit(0);
+});
+
 const app = express();
 
 const { requireAuth } = require('./lib/require-auth');
@@ -57,6 +73,7 @@ const market = require('./routes/market');
 app.use('/quote', market.quoteRouter);
 app.use('/chart', market.chartRouter);
 app.use('/', require('./routes/connect'));
+app.use('/notifications', require('./routes/notifications'));
 
 // Android passkey association: the app package + APK signing SHA-256 must be
 // discoverable at https://<WEBAUTHN_RP_ID>/.well-known/assetlinks.json for
