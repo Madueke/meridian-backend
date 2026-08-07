@@ -68,6 +68,7 @@ app.use('/risk-status', requireAuth, require('./routes/risk'));
 app.use('/execute-trade-signal', requireAuth, require('./routes/execute'));
 app.use('/strategy', requireAuth, require('./routes/strategy'));
 app.use('/backtest', requireAuth, require('./routes/backtest'));
+app.use('/train', requireAuth, require('./routes/train'));
 app.use('/settings', requireAuth, require('./routes/settings'));
 const market = require('./routes/market');
 app.use('/quote', market.quoteRouter);
