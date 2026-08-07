@@ -64,6 +64,7 @@ server.registerTool(
           type: 'text',
           text: JSON.stringify({
             available: true,
+            simulation: state.simulation === true,
             balance: state.balance,
             equity: state.equity,
             open_positions: Array.isArray(state.open_positions) ? state.open_positions.slice(0, 20) : [],
@@ -223,7 +224,8 @@ server.registerTool(
               ? {
                   executed: true,
                   trade_id: result.trade_id,
-                  message: `Trade executed: ${String(order.direction).toUpperCase()} ${order.symbol} entry ${order.entry}, stop ${order.stop}, target ${order.target}.`,
+                  simulation: result.simulation === true,
+                  message: `${result.simulation ? 'SIMULATED trade recorded (demo bridge): ' : 'Trade executed: '}${String(order.direction).toUpperCase()} ${order.symbol} entry ${order.entry}, stop ${order.stop}, target ${order.target}.`,
                 }
               : { executed: false, reason: result.reason },
           ),

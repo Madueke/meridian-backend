@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// mcp/tradingview-server.js — MCP server exposing Neutral Pip's read-only
+// mcp/market-data-server.js — MCP server exposing Neutral Pip's read-only
 // chart data source (Yahoo Finance chart API with Binance fallback) to Hermes
 // as native MCP tools.
 // TRADING MODE: read-only market data only. No account access, no execution.
@@ -16,7 +16,7 @@ const marketData = require('../lib/market-data');
 const TIMEFRAMES = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'];
 
 const server = new McpServer({
-  name: 'tradingview-server',
+  name: 'market-data-server',
   version: '1.0.0',
 });
 
@@ -75,10 +75,10 @@ server.registerTool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('[tradingview-server] connected (stdio)');
+  console.error('[market-data-server] connected (stdio)');
 }
 
 main().catch((err) => {
-  console.error('[tradingview-server] fatal:', err.message);
+  console.error('[market-data-server] fatal:', err.message);
   process.exit(1);
 });
